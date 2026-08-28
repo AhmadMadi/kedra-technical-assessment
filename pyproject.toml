@@ -11,4 +11,5 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "dagster>=1.7",
     "dagster-webserver>=1.7",
+    "python-dateutil>=2.9"
 ]
