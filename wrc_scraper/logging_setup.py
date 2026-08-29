@@ -1,4 +1,4 @@
-"""Structured JSON logging for the whole pipeline (spec §10).
+"""Structured JSON logging for the whole pipeline.
 
 Every event is one JSON line on stdout: machine-parseable (jq/grep-able, shippable
 to any log aggregator), while Scrapy's own human-oriented logs stay on stderr —

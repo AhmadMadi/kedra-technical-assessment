@@ -43,8 +43,7 @@ def curated_name(record: dict, counts: Counter) -> str:
     return f'{ident}{record["file_ext"]}'
 
 def run_transform(start_date: str, end_date: str) -> dict:
-    """The transformation itself — callable from the CLI (main below) or from an
-    orchestrator (Dagster op in M6). Returns the run's counters."""
+    """Callable from the CLI (main below) or from an orchestrator. Returns the run's counters."""
     datetime.strptime(start_date, "%Y-%m-%d")  # fail fast on garbage, any caller
     datetime.strptime(end_date, "%Y-%m-%d")
 

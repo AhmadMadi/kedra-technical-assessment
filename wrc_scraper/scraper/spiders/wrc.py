@@ -31,7 +31,7 @@ class WrcSpider(scrapy.Spider):
         super().__init__(*args, **kwargs)
         self.start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
         self.end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
-        # Run ledger for the end-of-run summary (spec §10):
+        # Run ledger for the end-of-run summary:
         self.found = {}      # "partition/body" -> banner count
         self.failures = []   # every failed download: {url, error}
 
@@ -168,8 +168,7 @@ class WrcSpider(scrapy.Spider):
         yield item
 
     def closed(self, reason):
-        """Spider lifecycle hook — Scrapy calls this once when the crawl ends.
-        Emits the end-of-run summary the spec demands (§10)."""
+        """Called by Scrapy once when the crawl ends; emits the run summary."""
         stats = self.crawler.stats
         log.info(
             "run_summary",
