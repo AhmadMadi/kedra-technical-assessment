@@ -51,6 +51,7 @@ def run_transform(start_date: str, end_date: str) -> dict:
     landing = mongo[env.mongo_db][env.mongo_collection_landing]
     curated = mongo[env.mongo_db][env.mongo_collection_curated]
     curated.create_index("record_url", unique=True)
+    curated.create_index("identifier")  # consumers look records up by identifier
 
     s3 = boto3.client(
         "s3", 
