@@ -10,7 +10,19 @@ and every record carries its `partition_date`, so any slice can be re-run indepe
 Partitions are half-open `[start, end)` internally; the site's inclusive `to` filter
 gets `end − 1 day`, so a boundary-day decision can never land in two partitions.
 
-## Retries and rate limiting
+## Speed, retries and rate limiting
+
+Speed comes from structure, not aggression: plain HTTP GETs instead of a headless
+browser (recon showed the site's pager exposes the search as stateless query
+parameters, so no ViewState postbacks and no JS rendering), pagination fanned out in
+parallel from page 1's result count instead of chained page-by-page, and unchanged
+documents costing a fetch but no storage work on re-runs. The ceiling is deliberate:
+courtesy, not code, is the binding constraint — more parallelism against one domain
+risks a ban, which is the slowest outcome of all. Both knobs (`DOWNLOAD_DELAY`,
+`CONCURRENT_REQUESTS`) are config. The next real speedups would be conditional
+requests (If-Modified-Since, if the server honors them) and incremental scheduling —
+daily runs over recent windows only, which the date-partitioned idempotent design
+already supports.
 
 Politeness first: `robots.txt` respected, a real browser User-Agent, a base
 `DOWNLOAD_DELAY`, capped concurrency, and AutoThrottle adjusting pace to the server's
