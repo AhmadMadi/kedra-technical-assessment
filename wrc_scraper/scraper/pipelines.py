@@ -96,19 +96,20 @@ class MongoMetadataPipeline:
     def open_spider(self):
         self.client = MongoClient(env.mongo_uri)
         self.collection = self.client[env.mongo_db][env.mongo_collection_landing]
-        self.collection.create_index("identifier", unique=True)
+        self.collection.create_index("record_url", unique=True)
+        self.collection.create_index("identifier")
 
     def close_spider(self):
         self.client.close()
 
     def process_item(self, item):
-        existing = self.collection.find_one({ "identifier": item["identifier"] })
+        existing = self.collection.find_one({ "record_url": item["record_url"] })
         if existing and existing.get("file_hash") and existing.get("file_hash") == item.get("file_hash"):
             item["unchanged"] = True # same doc as the last run, change detection done via hash
 
         now = datetime.now(timezone.utc)
         self.collection.update_one(
-            { "identifier": item["identifier"] },
+            { "record_url": item["record_url"] },
             {
                 "$set": { **item, "last_seen_at": now },
                 "$setOnInsert": { "first_seen_at": now }

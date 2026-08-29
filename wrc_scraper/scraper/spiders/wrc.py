@@ -1,9 +1,11 @@
 import math
+import scrapy
+
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
-
-import scrapy
 from dateutil.relativedelta import relativedelta
+from urllib.parse import urlencode, urlparse
+from scrapy.http import TextResponse
 
 from wrc_scraper.config import settings as env
 
@@ -15,6 +17,11 @@ BODIES = {
 }
 
 PAGE_SIZE = 10
+
+# Every WRC page links cookie_policy.pdf and a site-guide PDF
+# Without filtering, all records would suddenly "have attachments." 
+# Substring match on the lowercased path.
+ATTACHMENT_EXCLUDE = ("decisions_information_guide", "cookie_policy")
 
 class WrcSpider(scrapy.Spider):
     name = "wrc"
@@ -79,6 +86,10 @@ class WrcSpider(scrapy.Spider):
                 "partition_date": meta["partition_date"]
             }
 
+            # The catalog row's own page is the record's true identity — EAT-era
+            # refNOs are NOT unique (one number can span many distinct cases).
+            item["record_url"] = item["doc_url"] or f"missing-doc:{item['identifier']}"
+
             if item["doc_url"]:
                 yield scrapy.Request(
                     item["doc_url"],
@@ -117,6 +128,26 @@ class WrcSpider(scrapy.Spider):
 
     def parse_document(self, response):
         item = response.meta["item"]
+
+        # Old EAT-era case pages are thin HTML wrappers around a PDF/DOC attachment.
+        # If this response is HTML and links to a real document, hop once more and
+        # store THAT instead (spec 6a: store PDF/DOC files as they are).
+        if isinstance(response, TextResponse):
+            for href in response.css("a::attr(href)").getall():
+                path = urlparse(href).path.lower()
+                if path.endswith((".pdf", ".doc", ".docx")) and not any(
+                    x in path for x in ATTACHMENT_EXCLUDE
+                ):
+                    item["page_url"] = response.url
+                    item["doc_url"] = response.urljoin(href)
+                    yield scrapy.Request(
+                        item["doc_url"],
+                        callback=self.parse_document,
+                        errback=self.on_download_error,
+                        meta={"item": item},
+                    )
+                    return
+
         item["file_content"] = response.body
         item["content_type"] = (response.headers.get("Content-Type") or b"").decode()
         yield item
