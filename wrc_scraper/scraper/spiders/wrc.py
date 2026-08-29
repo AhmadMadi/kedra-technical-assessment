@@ -81,6 +81,7 @@ class WrcSpider(scrapy.Spider):
         for row in response.css("li.each-item"):
             href = row.css("h2.title a::attr(href)").get()
             item = {
+                "source": "workplacerelations.ie",
                 "identifier": (row.css("span.refNO::text").get() or "").strip(),
                 "title": (row.css("h2.title::attr(title)").get() or "").strip(),
                 "description": (row.css("p.description::attr(title)").get() or "").strip(),
