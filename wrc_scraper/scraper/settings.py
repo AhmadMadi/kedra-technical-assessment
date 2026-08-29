@@ -16,3 +16,9 @@ RETRY_ENABLED = True
 RETRY_TIMES = 3
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+
+ITEM_PIPELINES = {
+    "wrc_scraper.scraper.pipelines.NormalizeAndHashPipeline": 100,
+    "wrc_scraper.scraper.pipelines.MinioLandingPipeline": 200,
+    "wrc_scraper.scraper.pipelines.MongoMetadataPipeline": 300,
+}

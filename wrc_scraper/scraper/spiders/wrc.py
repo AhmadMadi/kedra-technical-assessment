@@ -46,8 +46,11 @@ class WrcSpider(scrapy.Spider):
         return f"{env.scraper_start_url}?{qs}"
 
     async def start(self):
+        # For each parition, automated next()
         for frm, upper in self._partitions():
+            # For each body (checkbox), also an automated next()
             for body_name, body_id in BODIES.items():
+                # Scrapy engine queueing the requests
                 yield scrapy.Request(
                     self._search_url(body_id, frm, upper, page = 1),
                     callback=self.parse_results,
@@ -66,7 +69,7 @@ class WrcSpider(scrapy.Spider):
 
         for row in response.css("li.each-item"):
             href = row.css("h2.title a::attr(href)").get()
-            yield {
+            item = {
                 "identifier": (row.css("span.refNO::text").get() or "").strip(),
                 "title": (row.css("h2.title::attr(title)").get() or "").strip(),
                 "description": (row.css("p.description::attr(title)").get() or "").strip(),
@@ -76,15 +79,28 @@ class WrcSpider(scrapy.Spider):
                 "partition_date": meta["partition_date"]
             }
 
-        # Fan out the remaining pages, but only from page 1, so it happens once
-        # per (partition, body) and not once per page
+            if item["doc_url"]:
+                yield scrapy.Request(
+                    item["doc_url"],
+                    callback=self.parse_document,
+                    errback=self.on_download_error,
+                    meta={ "item": item }
+                )
+            else:
+                self.logger.warning("record without doc link: %s", item["identifier"])
+                yield item
+
+         # Fan out only from page 1, other pages would mint duplicate tickets 
+         # (scheduler dedup would drop them, but the guard avoids the waste and keeps found= logged once)
         if meta["page"] == 1:
             total_txt = response.css("div.searchhead").re_first(r"of\s+([\d,]+)\s+results")
             total = int(total_txt.replace(",", "")) if total_txt else 0
+
             self.logger.info(
                 "partition=%s body=%s found=%d",
                 meta["partition_date"], meta["body"], total,
             )
+
             for page in range(2, math.ceil(total / PAGE_SIZE) + 1):
                 yield scrapy.Request(
                     self._search_url(meta["body_id"], meta["frm"], meta["upper"], page),
@@ -98,3 +114,18 @@ class WrcSpider(scrapy.Spider):
                         "page": page,
                     }
                 )
+
+    def parse_document(self, response):
+        item = response.meta["item"]
+        item["file_content"] = response.body
+        item["content_type"] = (response.headers.get("Content-Type") or b"").decode()
+        yield item
+
+    def on_download_error(self, failure):
+        item = failure.request.meta["item"]
+        self.logger.error(
+            "Download failed for URL=%s - Error=%s", failure.request.url, repr(failure.value)
+        )
+
+        item["download_error"] = repr(failure.value)
+        yield item
