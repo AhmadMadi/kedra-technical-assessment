@@ -8,6 +8,7 @@ from urllib.parse import urlencode, urlparse
 from scrapy.http import TextResponse
 
 from wrc_scraper.config import settings as env
+from wrc_scraper.logging_setup import log
 
 BODIES = {
     "workplace-relations-commission": 15376,
@@ -30,6 +31,9 @@ class WrcSpider(scrapy.Spider):
         super().__init__(*args, **kwargs)
         self.start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
         self.end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+        # Run ledger for the end-of-run summary (spec §10):
+        self.found = {}      # "partition/body" -> banner count
+        self.failures = []   # every failed download: {url, error}
 
     def _partitions(self):
         """Yield [cursor, upper) windows of PARTITION_MONTHS between the dates"""
@@ -98,7 +102,8 @@ class WrcSpider(scrapy.Spider):
                     meta={ "item": item }
                 )
             else:
-                self.logger.warning("record without doc link: %s", item["identifier"])
+                log.warning("record_without_doc_link", identifier=item["identifier"],
+                            partition=meta["partition_date"], body=meta["body"])
                 yield item
 
          # Fan out only from page 1, other pages would mint duplicate tickets 
@@ -107,10 +112,9 @@ class WrcSpider(scrapy.Spider):
             total_txt = response.css("div.searchhead").re_first(r"of\s+([\d,]+)\s+results")
             total = int(total_txt.replace(",", "")) if total_txt else 0
 
-            self.logger.info(
-                "partition=%s body=%s found=%d",
-                meta["partition_date"], meta["body"], total,
-            )
+            self.found[f'{meta["partition_date"]}/{meta["body"]}'] = total
+            log.info("partition_scanned", partition=meta["partition_date"],
+                     body=meta["body"], found=total)
 
             for page in range(2, math.ceil(total / PAGE_SIZE) + 1):
                 yield scrapy.Request(
@@ -154,9 +158,31 @@ class WrcSpider(scrapy.Spider):
 
     def on_download_error(self, failure):
         item = failure.request.meta["item"]
-        self.logger.error(
-            "Download failed for URL=%s - Error=%s", failure.request.url, repr(failure.value)
-        )
+        error = repr(failure.value)
+        log.error("download_failed", url=failure.request.url, error=error,
+                  identifier=item.get("identifier"), partition=item.get("partition_date"))
+        self.failures.append({"url": failure.request.url, "error": error})
 
-        item["download_error"] = repr(failure.value)
+        item["download_error"] = error
         yield item
+
+    def closed(self, reason):
+        """Spider lifecycle hook — Scrapy calls this once when the crawl ends.
+        Emits the end-of-run summary the spec demands (§10)."""
+        stats = self.crawler.stats
+        log.info(
+            "run_summary",
+            reason=reason,
+            date_range=f"{self.start_date} -> {self.end_date}",
+            found_per_partition_body=self.found,
+            total_found=sum(self.found.values()),
+            items_scraped=stats.get_value("item_scraped_count", 0),
+            records_new=stats.get_value("wrc/records_new", 0),
+            records_unchanged=stats.get_value("wrc/records_unchanged", 0),
+            records_updated=stats.get_value("wrc/records_updated", 0),
+            files_uploaded=stats.get_value("wrc/files_uploaded", 0),
+            uploads_skipped=stats.get_value("wrc/uploads_skipped", 0),
+            records_dropped=stats.get_value("wrc/records_dropped", 0),
+            failed_downloads=len(self.failures),
+            failures=self.failures,
+        )

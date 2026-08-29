@@ -9,8 +9,20 @@ from botocore.exceptions import ClientError
 from pymongo import MongoClient
 
 from wrc_scraper.config import settings as env
+from wrc_scraper.logging_setup import log
 
 DOC_EXTENSIONS = [".pdf", ".doc", ".docx"]
+
+
+class StatsAwarePipeline:
+    """Base: gives every station access to Scrapy's stats collector, so pipeline
+    outcomes (stored/skipped/dropped…) can be counted into the run summary."""
+
+    @classmethod
+    def from_crawler(cls, crawler):
+        obj = cls()
+        obj.stats = crawler.stats
+        return obj
 
 # The server injects volatile comments that change between fetches — discovered by
 # diffing "versions" of the same page: first "<!-- Elapsed time: 0.58… -->" (render
@@ -19,13 +31,16 @@ DOC_EXTENSIONS = [".pdf", ".doc", ".docx"]
 # scrub them ALL from the hash input. The stored file keeps its raw bytes regardless.
 HTML_COMMENTS = re.compile(rb"<!--.*?-->", re.DOTALL)
 
-class NormalizeAndHashPipeline:
+class NormalizeAndHashPipeline(StatsAwarePipeline):
     """Station 1: canonical identifier, file extension, sha256 of the bytes."""
 
     def process_item(self, item):
         raw_id = item.get("identifier") or ""
         canonical = re.sub(r"\s+", "", raw_id).upper()
         if not canonical:
+            self.stats.inc_value("wrc/records_dropped")
+            log.warning("record_dropped", reason="no identifier",
+                        doc_url=item.get("doc_url"), partition=item.get("partition_date"))
             raise DropItem(f"Record has no identifier: {item.get('doc_url')}")
 
         item["identifier_raw"] = raw_id
@@ -48,7 +63,7 @@ class NormalizeAndHashPipeline:
 
         return item
 
-class MinioLandingPipeline:
+class MinioLandingPipeline(StatsAwarePipeline):
     """Station 2: upload file bytes to the landing bucket, content-addressed, append only"""
 
     def open_spider(self):
@@ -75,6 +90,7 @@ class MinioLandingPipeline:
         try:
             self.s3.head_object(Bucket=env.s3_bucket_landing, Key=key)
             item["file_upload_skipped"] = True # same content already stored
+            self.stats.inc_value("wrc/uploads_skipped")
         except ClientError as e:
             if e.response["Error"]["Code"] == "404":
                 self.s3.put_object(
@@ -83,15 +99,16 @@ class MinioLandingPipeline:
                     Body=content,
                     ContentType=item.get("content_type") or "application/octet-stream"
                 )
-            
+                self.stats.inc_value("wrc/files_uploaded")
             else:
                 raise
 
         item["file_path"] = f"{env.s3_bucket_landing}/{key}"
         return item
 
-class MongoMetadataPipeline:
-    """Station 3: upsert the metadata records, idempotent on the canonical identifier"""
+class MongoMetadataPipeline(StatsAwarePipeline):
+    """Station 3: upsert the metadata records — idempotent on record_url (the catalog
+    row's own page; identifiers are NOT unique in EAT-era data)."""
 
     def open_spider(self):
         self.client = MongoClient(env.mongo_uri)
@@ -106,6 +123,11 @@ class MongoMetadataPipeline:
         existing = self.collection.find_one({ "record_url": item["record_url"] })
         if existing and existing.get("file_hash") and existing.get("file_hash") == item.get("file_hash"):
             item["unchanged"] = True # same doc as the last run, change detection done via hash
+            self.stats.inc_value("wrc/records_unchanged")
+        elif existing:
+            self.stats.inc_value("wrc/records_updated")
+        else:
+            self.stats.inc_value("wrc/records_new")
 
         now = datetime.now(timezone.utc)
         self.collection.update_one(
